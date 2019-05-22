@@ -8,7 +8,7 @@ from optuna.integration import ChainerMNStudy
 from optuna import pruners
 from optuna.pruners import BasePruner  # NOQA
 from optuna.storages import BaseStorage  # NOQA
-from optuna.storages import InMemoryStorage
+from optuna.storages import get_storage
 from optuna.storages import RDBStorage
 from optuna.structs import TrialPruned
 from optuna.structs import TrialState
@@ -33,7 +33,7 @@ try:
 except ImportError:
     _available = False
 
-STORAGE_MODES = ['new', 'common']
+STORAGE_MODES = ['new', 'common', 'none']
 PRUNER_INIT_FUNCS = [lambda: pruners.MedianPruner(), lambda: pruners.SuccessiveHalvingPruner()]
 CACHE_MODES = [True, False]
 
@@ -80,7 +80,10 @@ class MultiNodeStorageSupplier(StorageSupplier):
         self.storage = None  # type: Optional[RDBStorage]
 
     def __enter__(self):
-        # type: () -> RDBStorage
+        # type: () -> Optional[RDBStorage]
+
+        if self.storage_specifier == 'none':
+            return None
 
         if self.comm.rank == 0:
             storage = super(MultiNodeStorageSupplier, self).__enter__()
@@ -136,22 +139,15 @@ class TestChainerMNStudy(object):
 
         TestChainerMNStudy._check_multi_node(comm)
 
+        if storage_mode == 'none':
+            pytest.skip("InMemoryStorage does not support multiple studies.")
+
         with MultiNodeStorageSupplier(storage_mode, cache_mode, comm) as storage:
             # Create study_name for each rank.
-            name = create_study(storage).study_name
-            study = Study(name, storage)
+            study = create_study(storage)
 
             with pytest.raises(ValueError):
                 ChainerMNStudy(study, comm)
-
-    @staticmethod
-    def test_init_with_incompatible_storage(comm):
-        # type: (CommunicatorBase) -> None
-
-        study = TestChainerMNStudy._create_shared_study(InMemoryStorage(), comm)
-
-        with pytest.raises(ValueError):
-            ChainerMNStudy(study, comm)
 
     @staticmethod
     @pytest.mark.parametrize('storage_mode', STORAGE_MODES)
@@ -245,8 +241,9 @@ class TestChainerMNStudy(object):
 
     @staticmethod
     def _create_shared_study(storage, comm, pruner=None):
-        # type: (BaseStorage, CommunicatorBase, BasePruner) -> Study
+        # type: (Optional[BaseStorage], CommunicatorBase, BasePruner) -> Study
 
+        storage = get_storage(storage)
         name_local = create_study(storage).study_name if comm.rank == 0 else None
         name_bcast = comm.mpi_comm.bcast(name_local)
 
@@ -269,7 +266,7 @@ class TestChainerMNTrial(object):
 
         with MultiNodeStorageSupplier(storage_mode, cache_mode, comm) as storage:
             study = TestChainerMNStudy._create_shared_study(storage, comm)
-            trial_id = storage.create_new_trial_id(study.study_id)
+            trial_id = study.storage.create_new_trial_id(study.study_id)
             trial = Trial(study, trial_id)
             mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
 
@@ -288,7 +285,7 @@ class TestChainerMNTrial(object):
             low = 0.5
             high = 1.0
             for _ in range(10):
-                trial_id = storage.create_new_trial_id(study.study_id)
+                trial_id = study.storage.create_new_trial_id(study.study_id)
                 trial = Trial(study, trial_id)
                 mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
 
@@ -312,7 +309,7 @@ class TestChainerMNTrial(object):
             low = 1e-7
             high = 1e-2
             for _ in range(10):
-                trial_id = storage.create_new_trial_id(study.study_id)
+                trial_id = study.storage.create_new_trial_id(study.study_id)
                 trial = Trial(study, trial_id)
                 mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
 
@@ -337,7 +334,7 @@ class TestChainerMNTrial(object):
             high = 10.0
             q = 1.0
             for _ in range(10):
-                trial_id = storage.create_new_trial_id(study.study_id)
+                trial_id = study.storage.create_new_trial_id(study.study_id)
                 trial = Trial(study, trial_id)
                 mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
 
@@ -361,7 +358,7 @@ class TestChainerMNTrial(object):
             low = 0
             high = 10
             for _ in range(10):
-                trial_id = storage.create_new_trial_id(study.study_id)
+                trial_id = study.storage.create_new_trial_id(study.study_id)
                 trial = Trial(study, trial_id)
                 mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
 
@@ -384,7 +381,7 @@ class TestChainerMNTrial(object):
             study = TestChainerMNStudy._create_shared_study(storage, comm)
             choices = ('a', 'b', 'c')
             for _ in range(10):
-                trial_id = storage.create_new_trial_id(study.study_id)
+                trial_id = study.storage.create_new_trial_id(study.study_id)
                 trial = Trial(study, trial_id)
                 mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
 
@@ -407,7 +404,7 @@ class TestChainerMNTrial(object):
         with MultiNodeStorageSupplier(storage_mode, cache_mode, comm) as storage:
             study = TestChainerMNStudy._create_shared_study(
                 storage, comm, DeterministicPruner(is_pruning))
-            trial_id = storage.create_new_trial_id(study.study_id)
+            trial_id = study.storage.create_new_trial_id(study.study_id)
             trial = Trial(study, trial_id)
             mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
             mn_trial.report(1.0, 0)
@@ -421,7 +418,7 @@ class TestChainerMNTrial(object):
 
         with MultiNodeStorageSupplier(storage_mode, cache_mode, comm) as storage:
             study = TestChainerMNStudy._create_shared_study(storage, comm)
-            trial_id = storage.create_new_trial_id(study.study_id)
+            trial_id = study.storage.create_new_trial_id(study.study_id)
             trial = Trial(study, trial_id)
             mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
 
@@ -436,7 +433,7 @@ class TestChainerMNTrial(object):
 
         with MultiNodeStorageSupplier(storage_mode, cache_mode, comm) as storage:
             study = TestChainerMNStudy._create_shared_study(storage, comm)
-            trial_id = storage.create_new_trial_id(study.study_id)
+            trial_id = study.storage.create_new_trial_id(study.study_id)
             trial = Trial(study, trial_id)
             mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
 
@@ -453,7 +450,7 @@ class TestChainerMNTrial(object):
 
         with MultiNodeStorageSupplier(storage_mode, cache_mode, comm) as storage:
             study = TestChainerMNStudy._create_shared_study(storage, comm)
-            trial_id = storage.create_new_trial_id(study.study_id)
+            trial_id = study.storage.create_new_trial_id(study.study_id)
             trial = Trial(study, trial_id)
             mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
 
@@ -468,7 +465,7 @@ class TestChainerMNTrial(object):
 
         with MultiNodeStorageSupplier(storage_mode, cache_mode, comm) as storage:
             study = TestChainerMNStudy._create_shared_study(storage, comm)
-            trial_id = storage.create_new_trial_id(study.study_id)
+            trial_id = study.storage.create_new_trial_id(study.study_id)
             trial = Trial(study, trial_id)
             mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
 
@@ -483,7 +480,7 @@ class TestChainerMNTrial(object):
 
         with MultiNodeStorageSupplier(storage_mode, cache_mode, comm) as storage:
             study = TestChainerMNStudy._create_shared_study(storage, comm)
-            trial_id = storage.create_new_trial_id(study.study_id)
+            trial_id = study.storage.create_new_trial_id(study.study_id)
             trial = Trial(study, trial_id)
             mn_trial = integration.chainermn._ChainerMNTrial(trial, comm)
             with pytest.raises(AttributeError):

@@ -6,18 +6,21 @@ from optuna.distributions import BaseDistribution  # NOQA
 from optuna.logging import get_logger
 from optuna.pruners import BasePruner  # NOQA
 from optuna.storages import BaseStorage  # NOQA
-from optuna.storages import InMemoryStorage
 from optuna.storages import RDBStorage
+from optuna.structs import FrozenTrial  # NOQA
+from optuna.structs import StudyDirection  # NOQA
 from optuna.structs import TrialPruned
 from optuna.study import Study  # NOQA
 from optuna.trial import Trial  # NOQA
 from optuna import types
+import pandas as pd  # NOQA
 import warnings
 
 if types.TYPE_CHECKING:
     from typing import Any  # NOQA
     from typing import Callable  # NOQA
     from typing import Dict  # NOQA
+    from typing import List  # NOQA
     from typing import Optional  # NOQA
     from typing import Sequence  # NOQA
     from typing import Tuple  # NOQA
@@ -97,9 +100,6 @@ class ChainerMNStudy(object):
 
         _check_chainermn_availability()
 
-        if isinstance(study.storage, InMemoryStorage):
-            raise ValueError('ChainerMN integration is not available with InMemoryStorage.')
-
         if isinstance(study.storage, RDBStorage):
             if study.storage.engine.dialect.name == 'sqlite':
                 logger = get_logger(__name__)
@@ -166,6 +166,94 @@ class ChainerMNStudy(object):
         # type: (str, Any) -> None
 
         setattr(self.delegate, attr_name, value)
+
+    @property
+    def best_params(self):
+        # type: () -> Dict[str, Any]
+
+        return self._get_attrs('best_params')
+
+    @property
+    def best_value(self):
+        # type: () -> float
+
+        return self._get_attrs('best_value')
+
+    @property
+    def best_trial(self):
+        # type: () -> FrozenTrial
+
+        return self._get_attrs('best_trial')
+
+    @property
+    def direction(self):
+        # type: () -> StudyDirection
+
+        return self._get_attrs('direction')
+
+    @property
+    def trials(self):
+        # type: () -> List[FrozenTrial]
+
+        return self._get_attrs('trials')
+
+    @property
+    def user_attrs(self):
+        # type: () -> Dict[str, Any]
+
+        return self._get_attrs('user_attrs')
+
+    @property
+    def system_attrs(self):
+        # type: () -> Dict[str, Any]
+
+        return self._get_attrs('system_attrs')
+
+    def set_user_attr(self, key, value):
+        # type: (str, Any) -> None
+
+        if self.comm.rank == 0:
+            self.delegate.set_user_attr(key, value)
+
+    def set_system_attr(self, key, value):
+        # type: (str, Any) -> None
+
+        if self.comm.rank == 0:
+            self.delegate.set_system_attr(key, value)
+
+    def trials_dataframe(self, include_internal_fields=False):
+        # type: (bool) -> pd.DataFrame
+
+        if self.comm.rank == 0:
+            try:
+                result = self.delegate.trials_dataframe(include_internal_fields)
+                self.comm.mpi_comm.bcast(result)
+                return result
+            except Exception as e:
+                self.comm.mpi_comm.bcast(e)
+                raise
+        else:
+            result = self.comm.mpi_comm.bcast(None)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+    def _get_attrs(self, name):
+        # type: (str) -> Any
+
+        if self.comm.rank == 0:
+            try:
+                result = getattr(self.delegate, name)
+                self.comm.mpi_comm.bcast(result)
+                return result
+            except Exception as e:
+                self.comm.mpi_comm.bcast(e)
+                raise
+        else:
+            result = self.comm.mpi_comm.bcast(None)
+            if isinstance(result, Exception):
+                raise result
+            return result
 
 
 class _ChainerMNPruner(BasePruner):
