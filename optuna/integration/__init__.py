@@ -9,6 +9,7 @@ from optuna.types import TYPE_CHECKING
 _import_structure = {
     'chainer': ['ChainerPruningExtension'],
     'chainermn': ['ChainerMNStudy'],
+    'cmaes': ['CmaEsSampler'],
     'keras': ['KerasPruningCallback'],
     'lightgbm': ['LightGBMPruningCallback'],
     'mxnet': ['MXNetPruningCallback'],
