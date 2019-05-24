@@ -3,7 +3,6 @@ import numpy as np
 from optuna import distributions
 from optuna import logging
 from optuna.samplers import BaseSampler
-from optuna.samplers import RandomSampler
 from optuna.samplers import TPESampler
 from optuna.structs import StudyDirection
 from optuna.structs import TrialState
@@ -43,13 +42,23 @@ class SkoptSampler(BaseSampler):
 
         self.base_estimator = base_estimator
         self.independent_sampler = independent_sampler or TPESampler()
-        self.random_sampler = RandomSampler()
 
         self.optimizer = None  # type: skopt.Optimizer
         self.search_space = {}  # type: Dict[str, distributions.BaseDistribution]
         self.param_names = []  # type: List[str]
         self.known_trials = set()  # type: Set[int]
         self.logger = logging.get_logger(__name__)
+
+    def define_relative_search_space(self, study, trial):
+        # type: (RunningStudy, FrozenTrial) -> Dict[str, BaseDistribution]
+
+        space = study.full_search_space
+        if len(space) > 0:
+            name = sorted(list(space.keys()))[0]
+            del space[name]
+            if self.search_space != space:
+                self.logger.info("Search space (without {}): {}".format(name, space))
+        return space
 
     def sample_relative(self, study, trial, search_space):
         # type: (RunningStudy, FrozenTrial, Dict[str, BaseDistribution]) -> Dict[str, float]
@@ -143,14 +152,11 @@ class SkoptSampler(BaseSampler):
         for name in self.param_names:
             distribution = self.search_space[name]
 
-            if name in trial.params:
-                param_value = trial.params[name]
-                param_internal_value = distribution.to_internal_repr(param_value)
-                if not distribution._contains(param_internal_value):
-                    return None
-            else:
-                param_value = self.random_sampler.sample_independent(study, trial, name,
-                                                                     distribution)
+            assert name in trial.params
+            param_value = trial.params[name]
+            param_internal_value = distribution.to_internal_repr(param_value)
+            if not distribution._contains(param_internal_value):
+                return None
 
             if isinstance(distribution, distributions.DiscreteUniformDistribution):
                 param_value = (param_value - distribution.low) // distribution.q
